@@ -68,21 +68,23 @@ registry=http://localhost:4873/
 
 #### Cache a specific package from NPM:
 ```bash
-./npm-cache/add-npm <package-name>[@version]
+./npm-cache/add-npm <package-name>[@version-spec]
 ```
 
-Examples:
+**Supports version ranges and pinning:**
 ```bash
-./npm-cache/add-npm express
-./npm-cache/add-npm express@4.18.0
-./npm-cache/add-npm @types/node
-./npm-cache/add-npm @types/node@20.0.0
+./npm-cache/add-npm express                  # Latest version
+./npm-cache/add-npm express@4.18.0           # Exact version (pinned)
+./npm-cache/add-npm express@^4.18.0          # Caret range (^)
+./npm-cache/add-npm express@~4.18.0          # Tilde range (~)
+./npm-cache/add-npm @types/node@>=20.0.0     # Greater than or equal
+./npm-cache/add-npm @types/node              # Latest version
 ```
 
 This will:
-- Download the package from NPM
+- Download the package from NPM, respecting the exact version spec
 - Cache it in `~/npm-cache`
-- Recursively cache all dependencies
+- Recursively cache all dependencies **with their pinned versions**
 
 #### Scan projects and cache all dependencies:
 ```bash
@@ -97,8 +99,10 @@ Examples:
 
 This will:
 - Find all `package.json` files (excluding node_modules)
-- Extract all dependencies
-- Cache each unique package
+- Extract all dependencies **with their exact version specs** from package.json
+- Cache each unique package@version combination
+- **Respects pinned versions and version ranges** (^, ~, >=, etc.)
+- If different projects use different versions of the same package, all versions are cached
 
 #### Add a local package to the cache:
 ```bash
@@ -228,13 +232,15 @@ rm -rf ~/npm-cache
 
 ## Notes
 
-- The `add-npm` script recursively downloads dependencies. This can take time for packages with many dependencies.
-- Scoped packages (e.g., `@types/node`) are supported.
-- The system is designed for offline use - set `uplinks: {}` ensures no external registry calls.
-- For production use, consider using HTTPS and proper authentication.
+- **Version pinning is fully respected**: The scripts honor exact versions and ranges (^, ~, >=) from package.json files
+- The `add-npm` script recursively downloads dependencies with their pinned versions
+- `scan_projects` caches the exact version specs specified in your package.json files
+- Scoped packages (e.g., `@types/node`) are fully supported
+- The system is designed for offline use - `uplinks: {}` ensures no external registry calls
+- For production use, consider using HTTPS and proper authentication
 
 ## Limitations
 
-- Version range resolution in `add-npm` is simplified (uses latest for dependencies)
-- No automatic package updates - you must manually re-cache packages
+- No automatic package updates - you must manually re-cache packages when you want newer versions
 - Authentication is basic (htpasswd file)
+- Duplicate downloads are avoided within a single run, but not across multiple runs

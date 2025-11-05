@@ -5,9 +5,13 @@ const fs = require('fs-extra');
 const path = require('path');
 const { pipeline } = require('stream/promises');
 const tar = require('tar');
+const semver = require('semver');
 
 const NPM_REGISTRY = 'https://registry.npmjs.org';
 const STORAGE_PATH = path.join(process.env.HOME, 'npm-cache');
+
+// Track cached packages to avoid re-downloading
+const cachedPackages = new Set();
 
 async function getPackageMetadata(packageName) {
   const url = `${NPM_REGISTRY}/${packageName}`;
@@ -33,7 +37,6 @@ async function downloadAndStoreTarball(tarballUrl, packageName, version) {
 
     await pipeline(response.data, writer);
 
-    console.log(`  Downloaded: ${tarballPath}`);
     return tarballPath;
   } catch (error) {
     throw new Error(`Failed to download tarball: ${error.message}`);
@@ -46,76 +49,111 @@ async function savePackageMetadata(packageName, metadata) {
 
   const metadataPath = path.join(packageDir, 'package.json');
   await fs.writeJson(metadataPath, metadata, { spaces: 2 });
-
-  console.log(`  Saved metadata: ${metadataPath}`);
 }
 
-async function addPackage(packageSpec) {
-  let packageName, version;
+async function resolveVersionSpec(packageName, versionSpec, metadata) {
+  // Handle dist-tags (latest, next, beta, etc.)
+  if (metadata['dist-tags'] && metadata['dist-tags'][versionSpec]) {
+    return metadata['dist-tags'][versionSpec];
+  }
 
+  // If no version spec, use latest
+  if (!versionSpec || versionSpec === 'latest') {
+    return metadata['dist-tags'].latest;
+  }
+
+  // Get all available versions
+  const availableVersions = Object.keys(metadata.versions);
+
+  // If exact version exists, use it
+  if (metadata.versions[versionSpec]) {
+    return versionSpec;
+  }
+
+  // Try to resolve as semver range
+  const resolved = semver.maxSatisfying(availableVersions, versionSpec);
+
+  if (!resolved) {
+    throw new Error(`No version matching "${versionSpec}" found for ${packageName}`);
+  }
+
+  return resolved;
+}
+
+async function addPackage(packageSpec, depth = 0) {
+  let packageName, versionSpec;
+
+  // Parse package specification
   if (packageSpec.includes('@') && !packageSpec.startsWith('@')) {
     // package@version format (non-scoped)
-    [packageName, version] = packageSpec.split('@');
+    const atIndex = packageSpec.indexOf('@');
+    packageName = packageSpec.substring(0, atIndex);
+    versionSpec = packageSpec.substring(atIndex + 1);
   } else if (packageSpec.startsWith('@')) {
-    // Scoped package
+    // Scoped package (@scope/package or @scope/package@version)
     const parts = packageSpec.split('@');
     if (parts.length === 3) {
       // @scope/package@version
-      packageName = `${parts[0]}@${parts[1]}`;
-      version = parts[2];
+      packageName = `@${parts[1]}`;
+      versionSpec = parts[2];
     } else {
       // @scope/package (no version)
       packageName = packageSpec;
-      version = 'latest';
+      versionSpec = 'latest';
     }
   } else {
     // Just package name, no version
     packageName = packageSpec;
-    version = 'latest';
+    versionSpec = 'latest';
   }
 
-  console.log(`Fetching ${packageName}${version ? '@' + version : ''}...`);
+  const indent = '  '.repeat(depth);
+  console.log(`${indent}Resolving ${packageName}@${versionSpec}...`);
 
+  // Fetch package metadata
   const metadata = await getPackageMetadata(packageName);
 
-  // Resolve version
-  if (version === 'latest' || !version) {
-    version = metadata['dist-tags'].latest;
+  // Resolve version spec to actual version
+  const resolvedVersion = await resolveVersionSpec(packageName, versionSpec, metadata);
+
+  // Check if already cached
+  const cacheKey = `${packageName}@${resolvedVersion}`;
+  if (cachedPackages.has(cacheKey)) {
+    console.log(`${indent}  Already cached: ${cacheKey}`);
+    return;
   }
 
-  if (!metadata.versions[version]) {
-    throw new Error(`Version ${version} not found for package ${packageName}`);
-  }
+  console.log(`${indent}  Adding ${packageName}@${resolvedVersion} (from ${versionSpec})...`);
 
-  const versionData = metadata.versions[version];
+  const versionData = metadata.versions[resolvedVersion];
   const tarballUrl = versionData.dist.tarball;
 
-  console.log(`Adding ${packageName}@${version}...`);
-
   // Download the tarball
-  await downloadAndStoreTarball(tarballUrl, packageName, version);
+  await downloadAndStoreTarball(tarballUrl, packageName, resolvedVersion);
 
   // Save metadata
   await savePackageMetadata(packageName, versionData);
 
-  console.log(`Successfully added ${packageName}@${version}`);
+  // Mark as cached
+  cachedPackages.add(cacheKey);
 
-  // Recursively add dependencies if needed
+  console.log(`${indent}  ✓ ${packageName}@${resolvedVersion}`);
+
+  // Recursively add dependencies with their version specs
   const dependencies = {
     ...versionData.dependencies,
     ...versionData.peerDependencies
   };
 
   if (Object.keys(dependencies).length > 0) {
-    console.log(`Found ${Object.keys(dependencies).length} dependencies`);
+    console.log(`${indent}  Dependencies: ${Object.keys(dependencies).length}`);
 
-    for (const [depName, depVersion] of Object.entries(dependencies)) {
-      // Skip version ranges for now, just get latest
-      // A more sophisticated implementation would resolve version ranges
+    for (const [depName, depVersionSpec] of Object.entries(dependencies)) {
       try {
-        await addPackage(depName);
+        // Pass the actual version spec from package.json
+        await addPackage(`${depName}@${depVersionSpec}`, depth + 1);
       } catch (error) {
-        console.error(`  Warning: Failed to add dependency ${depName}: ${error.message}`);
+        console.error(`${indent}  Warning: Failed to add ${depName}@${depVersionSpec}: ${error.message}`);
       }
     }
   }
@@ -125,13 +163,15 @@ async function main() {
   const packageSpec = process.argv[2];
 
   if (!packageSpec) {
-    console.error('Usage: ./add-npm <package-name>[@version]');
+    console.error('Usage: ./add-npm <package-name>[@version-spec]');
     console.error('');
     console.error('Examples:');
     console.error('  ./add-npm express');
-    console.error('  ./add-npm express@4.18.0');
+    console.error('  ./add-npm express@4.18.0          # Exact version');
+    console.error('  ./add-npm express@^4.18.0         # Caret range');
+    console.error('  ./add-npm express@~4.18.0         # Tilde range');
     console.error('  ./add-npm @types/node');
-    console.error('  ./add-npm @types/node@20.0.0');
+    console.error('  ./add-npm @types/node@^20.0.0');
     process.exit(1);
   }
 
