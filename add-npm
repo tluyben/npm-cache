@@ -1,0 +1,149 @@
+#!/usr/bin/env node
+
+const axios = require('axios');
+const fs = require('fs-extra');
+const path = require('path');
+const { pipeline } = require('stream/promises');
+const tar = require('tar');
+
+const NPM_REGISTRY = 'https://registry.npmjs.org';
+const STORAGE_PATH = path.join(process.env.HOME, 'npm-cache');
+
+async function getPackageMetadata(packageName) {
+  const url = `${NPM_REGISTRY}/${packageName}`;
+  try {
+    const response = await axios.get(url);
+    return response.data;
+  } catch (error) {
+    throw new Error(`Failed to fetch metadata for ${packageName}: ${error.message}`);
+  }
+}
+
+async function downloadAndStoreTarball(tarballUrl, packageName, version) {
+  try {
+    const response = await axios.get(tarballUrl, { responseType: 'stream' });
+
+    // Create package directory structure
+    const packageDir = path.join(STORAGE_PATH, packageName.replace('/', '%2f'));
+    await fs.ensureDir(packageDir);
+
+    // Save the tarball
+    const tarballPath = path.join(packageDir, `${packageName.replace('/', '-')}-${version}.tgz`);
+    const writer = fs.createWriteStream(tarballPath);
+
+    await pipeline(response.data, writer);
+
+    console.log(`  Downloaded: ${tarballPath}`);
+    return tarballPath;
+  } catch (error) {
+    throw new Error(`Failed to download tarball: ${error.message}`);
+  }
+}
+
+async function savePackageMetadata(packageName, metadata) {
+  const packageDir = path.join(STORAGE_PATH, packageName.replace('/', '%2f'));
+  await fs.ensureDir(packageDir);
+
+  const metadataPath = path.join(packageDir, 'package.json');
+  await fs.writeJson(metadataPath, metadata, { spaces: 2 });
+
+  console.log(`  Saved metadata: ${metadataPath}`);
+}
+
+async function addPackage(packageSpec) {
+  let packageName, version;
+
+  if (packageSpec.includes('@') && !packageSpec.startsWith('@')) {
+    // package@version format (non-scoped)
+    [packageName, version] = packageSpec.split('@');
+  } else if (packageSpec.startsWith('@')) {
+    // Scoped package
+    const parts = packageSpec.split('@');
+    if (parts.length === 3) {
+      // @scope/package@version
+      packageName = `${parts[0]}@${parts[1]}`;
+      version = parts[2];
+    } else {
+      // @scope/package (no version)
+      packageName = packageSpec;
+      version = 'latest';
+    }
+  } else {
+    // Just package name, no version
+    packageName = packageSpec;
+    version = 'latest';
+  }
+
+  console.log(`Fetching ${packageName}${version ? '@' + version : ''}...`);
+
+  const metadata = await getPackageMetadata(packageName);
+
+  // Resolve version
+  if (version === 'latest' || !version) {
+    version = metadata['dist-tags'].latest;
+  }
+
+  if (!metadata.versions[version]) {
+    throw new Error(`Version ${version} not found for package ${packageName}`);
+  }
+
+  const versionData = metadata.versions[version];
+  const tarballUrl = versionData.dist.tarball;
+
+  console.log(`Adding ${packageName}@${version}...`);
+
+  // Download the tarball
+  await downloadAndStoreTarball(tarballUrl, packageName, version);
+
+  // Save metadata
+  await savePackageMetadata(packageName, versionData);
+
+  console.log(`Successfully added ${packageName}@${version}`);
+
+  // Recursively add dependencies if needed
+  const dependencies = {
+    ...versionData.dependencies,
+    ...versionData.peerDependencies
+  };
+
+  if (Object.keys(dependencies).length > 0) {
+    console.log(`Found ${Object.keys(dependencies).length} dependencies`);
+
+    for (const [depName, depVersion] of Object.entries(dependencies)) {
+      // Skip version ranges for now, just get latest
+      // A more sophisticated implementation would resolve version ranges
+      try {
+        await addPackage(depName);
+      } catch (error) {
+        console.error(`  Warning: Failed to add dependency ${depName}: ${error.message}`);
+      }
+    }
+  }
+}
+
+async function main() {
+  const packageSpec = process.argv[2];
+
+  if (!packageSpec) {
+    console.error('Usage: ./add-npm <package-name>[@version]');
+    console.error('');
+    console.error('Examples:');
+    console.error('  ./add-npm express');
+    console.error('  ./add-npm express@4.18.0');
+    console.error('  ./add-npm @types/node');
+    console.error('  ./add-npm @types/node@20.0.0');
+    process.exit(1);
+  }
+
+  await fs.ensureDir(STORAGE_PATH);
+
+  try {
+    await addPackage(packageSpec);
+    console.log('\nDone! Package and dependencies cached locally.');
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+main();

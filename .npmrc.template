@@ -1,0 +1,7 @@
+# Local NPM Cache Registry Configuration
+# Copy this file to your project root as .npmrc
+
+registry=http://localhost:4873/
+
+# Alternative: use registry.forge.local (requires /etc/hosts entry)
+# registry=https://registry.forge.local/

@@ -1,0 +1,43 @@
+# Verdaccio Configuration for Local NPM Cache
+
+# Storage path for cached packages
+storage: /home/tycho/npm-cache
+
+# Authentication
+auth:
+  htpasswd:
+    file: ./htpasswd
+    # Maximum amount of users allowed to register, defaults to "+infinity".
+    # You can set this to -1 to disable registration.
+    max_users: 1000
+
+# No upstream registries - fully offline mode
+uplinks: {}
+
+# Package access configuration
+packages:
+  '**':
+    # Allow all users (even non-authenticated) to access packages
+    access: $all
+    # Only authenticated users can publish
+    publish: $authenticated
+    # No proxying to upstream registries
+    proxy: []
+
+# Server configuration
+server:
+  keepAliveTimeout: 60
+
+# Web interface
+web:
+  enable: true
+  title: Local NPM Cache
+
+# Logging
+logs: { type: stdout, format: pretty, level: http }
+
+# Listen on all interfaces
+listen: 0.0.0.0:4873
+
+# Max body size for uploads (100MB)
+max_body_size: 100mb

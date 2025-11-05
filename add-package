@@ -1,0 +1,88 @@
+#!/usr/bin/env node
+
+const fs = require('fs-extra');
+const path = require('path');
+const tar = require('tar');
+const { execSync } = require('child_process');
+
+const STORAGE_PATH = path.join(process.env.HOME, 'npm-cache');
+
+async function packAndStorePackage(packagePath) {
+  // Resolve to absolute path
+  const absolutePath = path.resolve(packagePath);
+
+  if (!await fs.pathExists(absolutePath)) {
+    throw new Error(`Package directory does not exist: ${absolutePath}`);
+  }
+
+  const packageJsonPath = path.join(absolutePath, 'package.json');
+
+  if (!await fs.pathExists(packageJsonPath)) {
+    throw new Error(`No package.json found in: ${absolutePath}`);
+  }
+
+  // Read package.json
+  const packageJson = await fs.readJson(packageJsonPath);
+  const { name, version } = packageJson;
+
+  if (!name || !version) {
+    throw new Error('package.json must contain "name" and "version" fields');
+  }
+
+  console.log(`Packing ${name}@${version}...`);
+
+  // Create a tarball using npm pack
+  const originalCwd = process.cwd();
+  process.chdir(absolutePath);
+
+  try {
+    const tarballName = execSync('npm pack --silent', { encoding: 'utf-8' }).trim();
+    const tarballPath = path.join(absolutePath, tarballName);
+
+    console.log(`  Created tarball: ${tarballName}`);
+
+    // Create package directory in storage
+    const packageDir = path.join(STORAGE_PATH, name.replace('/', '%2f'));
+    await fs.ensureDir(packageDir);
+
+    // Move tarball to storage
+    const storageTarballPath = path.join(packageDir, `${name.replace('/', '-')}-${version}.tgz`);
+    await fs.move(tarballPath, storageTarballPath, { overwrite: true });
+
+    console.log(`  Stored: ${storageTarballPath}`);
+
+    // Save package.json metadata
+    const metadataPath = path.join(packageDir, 'package.json');
+    await fs.writeJson(metadataPath, packageJson, { spaces: 2 });
+
+    console.log(`  Saved metadata: ${metadataPath}`);
+
+    console.log(`\nSuccessfully cached ${name}@${version}`);
+  } finally {
+    process.chdir(originalCwd);
+  }
+}
+
+async function main() {
+  const packagePath = process.argv[2];
+
+  if (!packagePath) {
+    console.error('Usage: ./add-package <path-to-package>');
+    console.error('');
+    console.error('Examples:');
+    console.error('  ./add-package ./my-package');
+    console.error('  ./add-package /home/user/projects/my-lib');
+    process.exit(1);
+  }
+
+  await fs.ensureDir(STORAGE_PATH);
+
+  try {
+    await packAndStorePackage(packagePath);
+  } catch (error) {
+    console.error(`Error: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+main();

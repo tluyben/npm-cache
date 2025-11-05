@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+
+const fs = require('fs-extra');
+const path = require('path');
+const { glob } = require('glob');
+const { spawn } = require('child_process');
+
+async function findPackageJsonFiles(rootDir) {
+  console.log(`Scanning for package.json files in ${rootDir}...`);
+
+  const pattern = '**/package.json';
+  const ignore = ['**/node_modules/**', '**/dist/**', '**/build/**'];
+
+  const files = await glob(pattern, {
+    cwd: rootDir,
+    absolute: true,
+    ignore: ignore
+  });
+
+  return files;
+}
+
+async function extractDependencies(packageJsonPath) {
+  try {
+    const packageJson = await fs.readJson(packageJsonPath);
+    const dependencies = new Set();
+
+    // Collect all types of dependencies
+    const depTypes = [
+      'dependencies',
+      'devDependencies',
+      'peerDependencies',
+      'optionalDependencies'
+    ];
+
+    for (const depType of depTypes) {
+      if (packageJson[depType]) {
+        Object.keys(packageJson[depType]).forEach(dep => dependencies.add(dep));
+      }
+    }
+
+    return Array.from(dependencies);
+  } catch (error) {
+    console.error(`Error reading ${packageJsonPath}: ${error.message}`);
+    return [];
+  }
+}
+
+async function addPackageToCache(packageName) {
+  return new Promise((resolve, reject) => {
+    const addNpmScript = path.join(__dirname, 'add-npm');
+    const proc = spawn(addNpmScript, [packageName], {
+      stdio: 'inherit'
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Failed to add ${packageName}`));
+      }
+    });
+
+    proc.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
+
+async function main() {
+  const targetDir = process.argv[2] || process.cwd();
+
+  if (!await fs.pathExists(targetDir)) {
+    console.error(`Error: Directory ${targetDir} does not exist`);
+    process.exit(1);
+  }
+
+  console.log('Scanning projects for dependencies...\n');
+
+  // Find all package.json files
+  const packageJsonFiles = await findPackageJsonFiles(targetDir);
+
+  if (packageJsonFiles.length === 0) {
+    console.log('No package.json files found.');
+    process.exit(0);
+  }
+
+  console.log(`Found ${packageJsonFiles.length} package.json file(s)\n`);
+
+  // Collect all unique dependencies
+  const allDependencies = new Set();
+
+  for (const packageJsonPath of packageJsonFiles) {
+    console.log(`Processing: ${packageJsonPath}`);
+    const deps = await extractDependencies(packageJsonPath);
+    deps.forEach(dep => allDependencies.add(dep));
+  }
+
+  const uniqueDeps = Array.from(allDependencies).sort();
+
+  console.log(`\nFound ${uniqueDeps.length} unique dependencies:\n`);
+  uniqueDeps.forEach(dep => console.log(`  - ${dep}`));
+
+  console.log('\nCaching dependencies...\n');
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (const dep of uniqueDeps) {
+    try {
+      console.log(`\n[${successCount + failCount + 1}/${uniqueDeps.length}] Adding ${dep}...`);
+      await addPackageToCache(dep);
+      successCount++;
+    } catch (error) {
+      console.error(`Failed to cache ${dep}: ${error.message}`);
+      failCount++;
+    }
+  }
+
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`Scan complete!`);
+  console.log(`  Success: ${successCount}`);
+  console.log(`  Failed: ${failCount}`);
+  console.log(`  Total: ${uniqueDeps.length}`);
+  console.log(`${'='.repeat(60)}\n`);
+}
+
+main().catch(error => {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+});

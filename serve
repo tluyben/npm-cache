@@ -1,0 +1,44 @@
+#!/usr/bin/env node
+
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+const configPath = path.join(__dirname, 'config.yaml');
+const storagePath = path.join(process.env.HOME, 'npm-cache');
+
+// Ensure storage directory exists
+if (!fs.existsSync(storagePath)) {
+  fs.mkdirSync(storagePath, { recursive: true });
+  console.log(`Created storage directory: ${storagePath}`);
+}
+
+console.log('Starting Verdaccio local registry...');
+console.log(`Storage: ${storagePath}`);
+console.log('Registry URL: http://localhost:4873');
+console.log('');
+console.log('To use this registry:');
+console.log('  export NPM_CONFIG_REGISTRY=http://localhost:4873/');
+console.log('  or: npm config set registry http://localhost:4873/');
+console.log('');
+console.log('Press Ctrl+C to stop the server');
+console.log('');
+
+const verdaccio = spawn(
+  path.join(__dirname, 'node_modules', '.bin', 'verdaccio'),
+  ['-c', configPath],
+  {
+    stdio: 'inherit',
+    env: { ...process.env }
+  }
+);
+
+verdaccio.on('close', (code) => {
+  console.log(`Verdaccio exited with code ${code}`);
+  process.exit(code);
+});
+
+process.on('SIGINT', () => {
+  console.log('\nShutting down Verdaccio...');
+  verdaccio.kill('SIGINT');
+});
