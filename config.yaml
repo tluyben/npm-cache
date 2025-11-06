@@ -27,6 +27,8 @@ packages:
 # Server configuration
 server:
   keepAliveTimeout: 60
+  host: 0.0.0.0
+  port: 4873
 
 # Web interface
 web:
@@ -34,10 +36,7 @@ web:
   title: Local NPM Cache
 
 # Logging
-logs: { type: stdout, format: pretty, level: http }
-
-# Listen on all interfaces
-listen: 0.0.0.0:4873
+log: { type: stdout, format: pretty, level: http }
 
 # Max body size for uploads (100MB)
 max_body_size: 100mb
