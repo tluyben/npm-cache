@@ -2,7 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { runServer } = require('verdaccio');
+const { runServer, parseConfigFile } = require('verdaccio');
 
 const configPath = path.join(__dirname, 'config.yaml');
 const storagePath = path.join(process.env.HOME, 'npm-cache');
@@ -26,11 +26,30 @@ console.log('');
 
 async function start() {
   try {
-    const app = await runServer(configPath);
+    // Parse config to get server settings
+    const config = parseConfigFile(configPath);
+    const host = config.server?.host || '0.0.0.0';
+    const port = config.server?.port || 4873;
+
+    // Get the HTTP server instance from runServer
+    const server = await runServer(configPath);
+
+    // Actually start listening
+    server.listen(port, host, () => {
+      console.log(`Verdaccio is now listening on http://${host}:${port}/`);
+    });
+
+    server.on('error', (error) => {
+      console.error('Server error:', error);
+      process.exit(1);
+    });
 
     process.on('SIGINT', () => {
       console.log('\nShutting down Verdaccio...');
-      process.exit(0);
+      server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+      });
     });
   } catch (error) {
     console.error('Failed to start Verdaccio:', error);
