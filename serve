@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { runServer } = require('verdaccio');
 
 const configPath = path.join(__dirname, 'config.yaml');
 const storagePath = path.join(process.env.HOME, 'npm-cache');
@@ -24,21 +24,18 @@ console.log('');
 console.log('Press Ctrl+C to stop the server');
 console.log('');
 
-const verdaccio = spawn(
-  path.join(__dirname, 'node_modules', '.bin', 'verdaccio'),
-  ['-c', configPath],
-  {
-    stdio: 'inherit',
-    env: { ...process.env }
+async function start() {
+  try {
+    const app = await runServer(configPath);
+
+    process.on('SIGINT', () => {
+      console.log('\nShutting down Verdaccio...');
+      process.exit(0);
+    });
+  } catch (error) {
+    console.error('Failed to start Verdaccio:', error);
+    process.exit(1);
   }
-);
+}
 
-verdaccio.on('close', (code) => {
-  console.log(`Verdaccio exited with code ${code}`);
-  process.exit(code);
-});
-
-process.on('SIGINT', () => {
-  console.log('\nShutting down Verdaccio...');
-  verdaccio.kill('SIGINT');
-});
+start();
