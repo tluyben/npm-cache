@@ -239,8 +239,20 @@ rm -rf ~/npm-cache
 - The system is designed for offline use - `uplinks: {}` ensures no external registry calls
 - For production use, consider using HTTPS and proper authentication
 
+## Deduplication
+
+The system intelligently avoids duplicate downloads at multiple levels:
+
+1. **scan_projects**: Deduplicates package@version specs across all scanned projects
+2. **In-memory cache**: Within a single run, packages are only downloaded once
+3. **On-disk cache**: Checks if packages already exist before downloading (works across multiple runs)
+
+You can safely:
+- Run `scan_projects` multiple times - already cached packages are skipped
+- Add individual packages that may already be cached - they'll be skipped if present
+- Dependencies shared across packages are only downloaded once
+
 ## Limitations
 
 - No automatic package updates - you must manually re-cache packages when you want newer versions
 - Authentication is basic (htpasswd file)
-- Duplicate downloads are avoided within a single run, but not across multiple runs

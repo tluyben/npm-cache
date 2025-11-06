@@ -51,6 +51,15 @@ async function savePackageMetadata(packageName, metadata) {
   await fs.writeJson(metadataPath, metadata, { spaces: 2 });
 }
 
+async function isPackageCachedOnDisk(packageName, version) {
+  const packageDir = path.join(STORAGE_PATH, packageName.replace('/', '%2f'));
+  const tarballPath = path.join(packageDir, `${packageName.replace('/', '-')}-${version}.tgz`);
+  const metadataPath = path.join(packageDir, 'package.json');
+
+  // Check if both tarball and metadata exist
+  return await fs.pathExists(tarballPath) && await fs.pathExists(metadataPath);
+}
+
 async function resolveVersionSpec(packageName, versionSpec, metadata) {
   // Handle dist-tags (latest, next, beta, etc.)
   if (metadata['dist-tags'] && metadata['dist-tags'][versionSpec]) {
@@ -116,10 +125,17 @@ async function addPackage(packageSpec, depth = 0) {
   // Resolve version spec to actual version
   const resolvedVersion = await resolveVersionSpec(packageName, versionSpec, metadata);
 
-  // Check if already cached
+  // Check if already cached in memory (this run)
   const cacheKey = `${packageName}@${resolvedVersion}`;
   if (cachedPackages.has(cacheKey)) {
-    console.log(`${indent}  Already cached: ${cacheKey}`);
+    console.log(`${indent}  Already processed: ${cacheKey}`);
+    return;
+  }
+
+  // Check if already cached on disk (previous runs)
+  if (await isPackageCachedOnDisk(packageName, resolvedVersion)) {
+    console.log(`${indent}  Already on disk: ${cacheKey}`);
+    cachedPackages.add(cacheKey); // Mark as processed to avoid checking disk again
     return;
   }
 
